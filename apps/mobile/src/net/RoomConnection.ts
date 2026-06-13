@@ -5,7 +5,8 @@
  * isn't — and validation catches version/shape drift early).
  */
 import {
-  parseServerMessage,
+  decodeServerMessage,
+  encodeClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
   type PlayerInput,
@@ -32,6 +33,7 @@ export class RoomConnection {
   connect(): void {
     const url = `${this.baseUrl.replace(/\/+$/, "")}/rooms/${this.roomId}`;
     const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer"; // receive binary frames as ArrayBuffer
     this.ws = ws;
     this.handlers.onStatus?.("connecting");
 
@@ -41,17 +43,13 @@ export class RoomConnection {
     };
 
     ws.onmessage = (event: MessageEvent) => {
-      let data: unknown;
-      try {
-        data = JSON.parse(typeof event.data === "string" ? event.data : "");
-      } catch {
-        return;
-      }
+      const data = event.data;
+      if (typeof data === "string") return; // we speak binary
       let msg;
       try {
-        msg = parseServerMessage(data);
+        msg = decodeServerMessage(data as ArrayBuffer);
       } catch {
-        return; // ignore malformed / unknown messages
+        return; // ignore malformed messages
       }
       if (msg.t === "welcome") this.handlers.onWelcome?.(msg.youId, msg.tickRate);
       else if (msg.t === "snapshot") this.handlers.onSnapshot?.(msg.snapshot, msg.ackTick);
@@ -63,7 +61,7 @@ export class RoomConnection {
 
   send(msg: ClientMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      this.ws.send(encodeClientMessage(msg));
     }
   }
 
