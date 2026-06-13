@@ -6,7 +6,7 @@
  */
 
 /** Fixed simulation rate. The sim ALWAYS advances by exactly DT seconds per tick. */
-export const TICK_RATE = 30;
+export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
 
 /** Arena bounds in world units (origin top-left, +y down — matches screen space). */
