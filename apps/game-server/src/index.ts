@@ -26,7 +26,11 @@ export default {
 
     const roomId = match[1]!;
     const id = env.GAME_ROOM.idFromName(roomId);
-    const stub = env.GAME_ROOM.get(id);
+    // Pin the room near our players (India → Asia-Pacific). A Durable Object
+    // lives in ONE location for its lifetime; placing it close keeps RTT — and
+    // therefore the smoothing burden — low for everyone in the match. This only
+    // affects where a NEW object is created.
+    const stub = env.GAME_ROOM.get(id, { locationHint: "apac" });
     return stub.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
