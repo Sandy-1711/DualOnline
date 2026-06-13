@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ARENA_WIDTH, FIRE_COOLDOWN_TICKS, PLAYER_RADIUS, TICK_RATE } from "./constants.js";
-import { createInitialState, step } from "./sim.js";
-import type { InputMap, PlayerInput } from "./types.js";
-import { neutralInput } from "./types.js";
+import { ARENA_WIDTH, FIRE_COOLDOWN_TICKS, PLAYER_RADIUS, TICK_RATE } from "./constants";
+import { createInitialState, step } from "./sim";
+import type { InputMap, PlayerInput } from "./types";
+import { neutralInput } from "./types";
 
 /** Run `ticks` steps applying the same inputs each tick. */
 function run(playerIds: string[], inputs: InputMap, ticks: number) {

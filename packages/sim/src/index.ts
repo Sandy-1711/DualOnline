@@ -1,4 +1,4 @@
-export * from "./constants.js";
-export * from "./types.js";
-export * from "./vec.js";
-export { createInitialState, step } from "./sim.js";
+export * from "./constants";
+export * from "./types";
+export * from "./vec";
+export { createInitialState, step } from "./sim";

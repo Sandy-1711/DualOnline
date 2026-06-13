@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseClientMessage, parseServerMessage, PROTOCOL_VERSION } from "./index.js";
+import { parseClientMessage, parseServerMessage, PROTOCOL_VERSION } from "./index";
 
 describe("protocol", () => {
   it("accepts a valid join message", () => {

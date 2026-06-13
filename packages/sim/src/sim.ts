@@ -23,7 +23,7 @@ import {
   PROJECTILE_RADIUS,
   PROJECTILE_SPEED,
   SPAWN_POINTS,
-} from "./constants.js";
+} from "./constants";
 import {
   type GameState,
   type InputMap,
@@ -31,8 +31,8 @@ import {
   type PlayerId,
   type Projectile,
   neutralInput,
-} from "./types.js";
-import { clamp, distanceSq, normalize } from "./vec.js";
+} from "./types";
+import { clamp, distanceSq, normalize } from "./vec";
 
 function spawnPlayer(id: PlayerId, slot: number): Player {
   const spawn = SPAWN_POINTS[slot % SPAWN_POINTS.length]!;
