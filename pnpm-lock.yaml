@@ -36,6 +36,9 @@ importers:
 
   apps/mobile:
     dependencies:
+      '@dual/netcode':
+        specifier: workspace:*
+        version: link:../../packages/netcode
       '@dual/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

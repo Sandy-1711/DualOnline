@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dual/netcode": "workspace:*",
     "@dual/protocol": "workspace:*",
     "@dual/sim": "workspace:*",
     "@shopify/react-native-skia": "2.6.2",
