@@ -24,7 +24,9 @@ export const PROJECTILE_RADIUS = 6;
 export const PROJECTILE_SPEED = 520; // world units / second
 export const PROJECTILE_LIFETIME_TICKS = TICK_RATE * 2; // 2s before it expires
 export const PROJECTILE_DAMAGE = 25;
-export const FIRE_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.25); // 4 ticks @30Hz
+// 0.4s between shots (2.5/s). A slower fire rate also eases the netcode: fewer
+// fast projectiles in flight means less aliasing/flicker over the wire.
+export const FIRE_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.4);
 
 /** Spawn points (P0 top-left-ish, P1 bottom-right-ish), facing the centre. */
 export const SPAWN_POINTS = [
