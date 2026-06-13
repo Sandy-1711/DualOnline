@@ -80,6 +80,22 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  packages/netcode:
+    dependencies:
+      '@dual/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@dual/sim':
+        specifier: workspace:*
+        version: link:../sim
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@25.9.3)(lightningcss@1.32.0)(terser@5.48.0)
+
   packages/protocol:
     dependencies:
       zod:
