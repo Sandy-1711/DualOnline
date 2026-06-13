@@ -30,7 +30,12 @@ export interface RenderFrame {
 }
 
 const SEND_MS = 1000 / TICK_RATE;
-const INTERP_DELAY_MS = 100;
+// At a ~20Hz snapshot rate (50ms apart) we want a little more than two
+// snapshots of buffer so interpolation never runs past the newest one and stalls.
+const INTERP_DELAY_MS = 120;
+// Safety cap: if the server stops acking (dropped connection), don't let the
+// replay buffer grow without bound.
+const MAX_PENDING = 180;
 
 export function useOnlineGame(serverUrl: string, roomId: string) {
   const [status, setStatus] = useState<RoomStatus>("connecting");
@@ -85,6 +90,9 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
         firing: firingRef.current,
       };
       pendingRef.current.push({ tick, input });
+      if (pendingRef.current.length > MAX_PENDING) {
+        pendingRef.current.splice(0, pendingRef.current.length - MAX_PENDING);
+      }
       connRef.current?.sendInput(tick, input);
     }, SEND_MS);
     return () => clearInterval(id);
