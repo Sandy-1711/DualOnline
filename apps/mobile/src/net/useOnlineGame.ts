@@ -38,6 +38,12 @@ const INTERP_DELAY_MS = 150;
 // Safety cap: if the server stops acking (dropped connection), don't let the
 // replay buffer grow without bound.
 const MAX_PENDING = 180;
+// Adaptive interpolation: under jitter we grow the buffer up to this ceiling.
+const MAX_INTERP_DELAY_MS = 350;
+// Smooth error correction: when reconciliation moves our own player, ease the
+// visual to the corrected spot over a few frames instead of snapping.
+const ERR_DECAY_PER_FRAME = 0.85;
+const ERR_SNAP_THRESHOLD = 220; // beyond this (respawn/teleport) just snap, don't slide
 
 export function useOnlineGame(serverUrl: string, roomId: string) {
   const [status, setStatus] = useState<RoomStatus>("connecting");
@@ -65,6 +71,17 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
   // input we send, and re-based on the authoritative snapshot when one arrives.
   // This keeps the per-frame render path cheap (no full replay every frame).
   const predictedRef = useRef<GameState | null>(null);
+  // Adaptive interpolation delay + a decaying max of recent snapshot gaps.
+  const adaptiveDelayRef = useRef(INTERP_DELAY_MS);
+  const maxGapRef = useRef(0);
+  // Residual visual offset for our own player, blended out over frames so
+  // reconciliation corrections don't snap.
+  const renderErrRef = useRef({ x: 0, y: 0 });
+
+  const ownPos = (s: GameState | null, id: string | null) => {
+    const p = s?.players.find((pl) => pl.id === id);
+    return p ? { x: p.x, y: p.y } : null;
+  };
 
   const stepPredictionForOwnInput = (input: PlayerInput) => {
     const id = youIdRef.current;
@@ -84,20 +101,49 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
         setYouId(id);
       },
       onSnapshot: (snapshot, ackTick) => {
+        const now = Date.now();
+        // Adaptive interpolation delay: track a decaying max of snapshot gaps and
+        // widen the buffer when jitter spikes (helps a peer on a flaky network).
+        if (latestAtRef.current > 0) {
+          const gap = now - latestAtRef.current;
+          maxGapRef.current = Math.max(gap, maxGapRef.current * 0.9);
+          adaptiveDelayRef.current = Math.min(
+            MAX_INTERP_DELAY_MS,
+            Math.max(INTERP_DELAY_MS, maxGapRef.current * 1.5 + 40),
+          );
+        }
+
         const auth = snapshotToState(snapshot);
         authRef.current = auth;
         if (ackTick != null) {
           ackRef.current = ackTick;
           pendingRef.current = pruneAcked(pendingRef.current, ackTick);
         }
-        bufferRef.current.push(snapshot);
+        bufferRef.current.push(snapshot, now);
         latestSnapRef.current = snapshot;
-        latestAtRef.current = Date.now();
-        // Reconcile: re-base prediction on the authoritative truth, replaying the
-        // still-unacknowledged inputs. The expensive full replay happens here, at
-        // the ~20Hz snapshot rate — not on every render frame.
-        if (youIdRef.current) {
-          predictedRef.current = predict(auth, youIdRef.current, pendingRef.current, ackRef.current);
+        latestAtRef.current = now;
+
+        // Reconcile: re-base prediction on authoritative truth, replaying the
+        // still-unacknowledged inputs. (Expensive full replay only here, ~20Hz.)
+        const id = youIdRef.current;
+        if (id) {
+          const before = ownPos(predictedRef.current, id);
+          predictedRef.current = predict(auth, id, pendingRef.current, ackRef.current);
+          const after = ownPos(predictedRef.current, id);
+          // Smooth error correction: absorb the jump into a residual offset that
+          // the render loop blends out — unless it's huge (respawn), then snap.
+          if (before && after) {
+            const dx = before.x - after.x;
+            const dy = before.y - after.y;
+            if (Math.hypot(dx, dy) > ERR_SNAP_THRESHOLD) {
+              renderErrRef.current = { x: 0, y: 0 };
+            } else {
+              renderErrRef.current = {
+                x: renderErrRef.current.x + dx,
+                y: renderErrRef.current.y + dy,
+              };
+            }
+          }
         }
       },
     });
@@ -138,15 +184,24 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
       const predicted = predictedRef.current;
       if (id && predicted) {
         const interp =
-          bufferRef.current.sample() ?? {
+          bufferRef.current.sample(Date.now(), adaptiveDelayRef.current) ?? {
             players: predicted.players,
             projectiles: predicted.projectiles,
           };
 
+        const err = renderErrRef.current;
         const players: Player[] = predicted.players.map((p) => {
-          if (p.id === id) return p as Player; // predicted self
+          if (p.id === id) {
+            // predicted self + the residual correction offset being blended out
+            return { ...p, x: p.x + err.x, y: p.y + err.y } as Player;
+          }
           return (interp.players.find((x) => x.id === p.id) ?? p) as Player;
         });
+        // Decay the correction toward zero each frame.
+        err.x *= ERR_DECAY_PER_FRAME;
+        err.y *= ERR_DECAY_PER_FRAME;
+        if (Math.abs(err.x) < 0.05) err.x = 0;
+        if (Math.abs(err.y) < 0.05) err.y = 0;
 
         // Opponent bullets: dead-reckoned from the latest snapshot by velocity so
         // fast shots stay visible and smooth instead of flickering between sparse
