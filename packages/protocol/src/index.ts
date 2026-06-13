@@ -108,3 +108,7 @@ export function parseClientMessage(raw: unknown): ClientMessage {
 export function parseServerMessage(raw: unknown): ServerMessage {
   return ServerMessage.parse(raw);
 }
+
+// Binary wire codec (the transport actually used at runtime). The zod schemas
+// above remain the source of truth for the message TYPES.
+export * from "./binary";
