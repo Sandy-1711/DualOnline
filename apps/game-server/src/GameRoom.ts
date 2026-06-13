@@ -28,9 +28,19 @@ export interface Env {
 const MAX_PLAYERS = 2;
 const TICK_MS = 1000 / TICK_RATE;
 
+// Simulate at the full tick rate, but only BROADCAST every Nth tick. Snapshots
+// at ~20Hz cut bandwidth ~3x; client interpolation hides the gaps. (60/3 = 20Hz.)
+const SNAPSHOT_INTERVAL = 3;
+
+// A client sends input every tick, so silence means a dead/zombie connection
+// (closed tab, lost signal) whose close frame never arrived. Evict it so the
+// room can't get stuck "full" with ghosts.
+const CONN_TIMEOUT_MS = 8000;
+
 interface Conn {
   socket: WebSocket;
   id: string;
+  lastSeen: number;
 }
 
 export class GameRoom extends DurableObject<Env> {
@@ -42,6 +52,7 @@ export class GameRoom extends DurableObject<Env> {
   private acks = new Map<string, number>();
   private sim: GameState | null = null;
   private loop: ReturnType<typeof setInterval> | null = null;
+  private tickCount = 0;
 
   /** HTTP entrypoint — we only accept WebSocket upgrades here. */
   override async fetch(request: Request): Promise<Response> {
@@ -60,7 +71,7 @@ export class GameRoom extends DurableObject<Env> {
   private acceptConnection(socket: WebSocket): void {
     socket.accept();
     const id = crypto.randomUUID();
-    this.conns.set(socket, { socket, id });
+    this.conns.set(socket, { socket, id, lastSeen: Date.now() });
 
     const welcome: ServerMessage = {
       t: "welcome",
@@ -83,6 +94,7 @@ export class GameRoom extends DurableObject<Env> {
   private onMessage(socket: WebSocket, event: MessageEvent): void {
     const conn = this.conns.get(socket);
     if (!conn) return;
+    conn.lastSeen = Date.now(); // any traffic counts as "alive"
 
     let parsed: unknown;
     try {
@@ -136,15 +148,48 @@ export class GameRoom extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Drop connections that have gone silent (a client sends input every tick, so
+   * silence = a dead socket whose close frame never arrived). Returns true if
+   * anything was evicted. This is what stops the room getting stuck "full".
+   */
+  private sweepDeadConnections(): boolean {
+    const now = Date.now();
+    let changed = false;
+    for (const [socket, conn] of this.conns) {
+      if (now - conn.lastSeen > CONN_TIMEOUT_MS) {
+        this.inputs.delete(conn.id);
+        this.acks.delete(conn.id);
+        this.conns.delete(socket);
+        try {
+          socket.close(1001, "timeout");
+        } catch {
+          // already gone
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   private tick(): void {
+    if (this.sweepDeadConnections()) {
+      this.rebuildSim();
+      this.ensureLoop();
+    }
     if (!this.sim) return;
 
+    // Step the sim every tick (full rate) for fine-grained, prediction-friendly
+    // physics.
     const map: InputMap = {};
     for (const conn of this.conns.values()) {
       map[conn.id] = this.inputs.get(conn.id) ?? neutralInput();
     }
-
     this.sim = step(this.sim, map);
+
+    // ...but only broadcast every Nth tick to save bandwidth (~20Hz).
+    this.tickCount++;
+    if (this.tickCount % SNAPSHOT_INTERVAL !== 0) return;
 
     // The snapshot omits the sim's internal bookkeeping (nextProjectileId).
     const snapshot = {
@@ -163,7 +208,7 @@ export class GameRoom extends DurableObject<Env> {
       try {
         conn.socket.send(JSON.stringify(message));
       } catch {
-        // Socket is gone; the close handler will clean it up.
+        // Socket is gone; the sweep / close handler will clean it up.
       }
     }
   }
