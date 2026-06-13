@@ -11,6 +11,7 @@
  * React/timing glue.
  */
 import {
+  extrapolateProjectiles,
   predict,
   pruneAcked,
   SnapshotBuffer,
@@ -18,7 +19,7 @@ import {
   type PendingInput,
 } from "@dual/netcode";
 import { neutralInput, step, TICK_RATE, type GameState, type InputMap, type PlayerInput } from "@dual/sim";
-import type { Player, Projectile } from "@dual/protocol";
+import type { Player, Projectile, Snapshot } from "@dual/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { StickValue } from "../game/Joystick";
 import { RoomConnection, type RoomStatus } from "./RoomConnection";
@@ -30,9 +31,10 @@ export interface RenderFrame {
 }
 
 const SEND_MS = 1000 / TICK_RATE;
-// At a ~20Hz snapshot rate (50ms apart) we want a little more than two
-// snapshots of buffer so interpolation never runs past the newest one and stalls.
-const INTERP_DELAY_MS = 120;
+// At a ~20Hz snapshot rate (50ms apart) we want ~3 snapshots of buffer so jitter
+// and the occasional lost packet don't underrun interpolation (which causes the
+// opponent to freeze then teleport). Smoothness is bought with a little latency.
+const INTERP_DELAY_MS = 150;
 // Safety cap: if the server stops acking (dropped connection), don't let the
 // replay buffer grow without bound.
 const MAX_PENDING = 180;
@@ -55,6 +57,10 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
   const pendingRef = useRef<PendingInput[]>([]);
   const bufferRef = useRef(new SnapshotBuffer(INTERP_DELAY_MS));
   const clientTickRef = useRef(0);
+  // Newest authoritative snapshot + when it arrived — used to dead-reckon the
+  // opponent's projectiles to the present (they move in straight lines).
+  const latestSnapRef = useRef<Snapshot | null>(null);
+  const latestAtRef = useRef(0);
   // The current predicted state. Maintained INCREMENTALLY: stepped one tick per
   // input we send, and re-based on the authoritative snapshot when one arrives.
   // This keeps the per-frame render path cheap (no full replay every frame).
@@ -85,6 +91,8 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
           pendingRef.current = pruneAcked(pendingRef.current, ackTick);
         }
         bufferRef.current.push(snapshot);
+        latestSnapRef.current = snapshot;
+        latestAtRef.current = Date.now();
         // Reconcile: re-base prediction on the authoritative truth, replaying the
         // still-unacknowledged inputs. The expensive full replay happens here, at
         // the ~20Hz snapshot rate — not on every render frame.
@@ -140,9 +148,19 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
           return (interp.players.find((x) => x.id === p.id) ?? p) as Player;
         });
 
+        // Opponent bullets: dead-reckoned from the latest snapshot by velocity so
+        // fast shots stay visible and smooth instead of flickering between sparse
+        // snapshots. Our own bullets stay predicted (instant).
+        const latest = latestSnapRef.current;
+        const oppProjectiles = latest
+          ? extrapolateProjectiles(
+              latest.projectiles.filter((pr) => pr.ownerId !== id),
+              (Date.now() - latestAtRef.current) / 1000,
+            )
+          : [];
         const projectiles: Projectile[] = [
           ...(predicted.projectiles.filter((pr) => pr.ownerId === id) as Projectile[]),
-          ...interp.projectiles.filter((pr) => pr.ownerId !== id),
+          ...oppProjectiles,
         ];
 
         setFrame({ players, projectiles, youId: id });
