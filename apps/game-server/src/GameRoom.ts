@@ -19,7 +19,7 @@ import {
   type InputMap,
   type PlayerInput,
 } from "@dual/sim";
-import { parseClientMessage, PROTOCOL_VERSION, type ServerMessage } from "@dual/protocol";
+import { decodeClientMessage, encodeServerMessage, PROTOCOL_VERSION, type ServerMessage } from "@dual/protocol";
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
@@ -79,7 +79,7 @@ export class GameRoom extends DurableObject<Env> {
       youId: id,
       tickRate: TICK_RATE,
     };
-    socket.send(JSON.stringify(welcome));
+    socket.send(encodeServerMessage(welcome));
 
     socket.addEventListener("message", (event) => this.onMessage(socket, event));
     const cleanup = () => this.onClose(socket);
@@ -96,18 +96,13 @@ export class GameRoom extends DurableObject<Env> {
     if (!conn) return;
     conn.lastSeen = Date.now(); // any traffic counts as "alive"
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(typeof event.data === "string" ? event.data : "");
-    } catch {
-      return; // ignore non-JSON
-    }
-
     let msg;
     try {
-      msg = parseClientMessage(parsed);
+      const data = event.data;
+      if (typeof data === "string") return; // we speak binary
+      msg = decodeClientMessage(data as ArrayBuffer);
     } catch {
-      return; // ignore anything that doesn't match the protocol — never trust the wire
+      return; // malformed binary — never trust the wire
     }
 
     if (msg.t === "input") {
@@ -206,7 +201,7 @@ export class GameRoom extends DurableObject<Env> {
         snapshot,
       };
       try {
-        conn.socket.send(JSON.stringify(message));
+        conn.socket.send(encodeServerMessage(message));
       } catch {
         // Socket is gone; the sweep / close handler will clean it up.
       }

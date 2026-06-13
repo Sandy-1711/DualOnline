@@ -5,12 +5,70 @@
 const BASE = process.argv[2] ?? process.env.WS_URL ?? "ws://127.0.0.1:8787";
 const URL = `${BASE.replace(/\/+$/, "")}/rooms/smoke`;
 
+// Minimal inline binary codec mirroring packages/protocol/src/binary.ts, so this
+// plain .mjs can talk to the (now binary) server without importing TS.
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function encodeInput(tick, mx, my, aim, firing) {
+  const b = new ArrayBuffer(1 + 4 + 4 + 4 + 4 + 1);
+  const v = new DataView(b);
+  let o = 0;
+  v.setUint8(o, 2); o += 1;
+  v.setUint32(o, tick); o += 4;
+  v.setFloat32(o, mx); o += 4;
+  v.setFloat32(o, my); o += 4;
+  v.setFloat32(o, aim); o += 4;
+  v.setUint8(o, firing ? 1 : 0); o += 1;
+  return b;
+}
+
+function decodeServer(buf) {
+  const v = new DataView(buf);
+  const u = new Uint8Array(buf);
+  let o = 0;
+  const str = () => { const n = v.getUint16(o); o += 2; const s = dec.decode(u.subarray(o, o + n)); o += n; return s; };
+  const tag = v.getUint8(o); o += 1;
+  if (tag === 16) {
+    const ver = v.getUint8(o); o += 1;
+    const tickRate = v.getUint8(o); o += 1;
+    return { t: "welcome", v: ver, youId: str(), tickRate };
+  }
+  if (tag === 17) {
+    const hasAck = v.getUint8(o) === 1; o += 1;
+    let ackTick; if (hasAck) { ackTick = v.getUint32(o); o += 4; }
+    const tick = v.getUint32(o); o += 4;
+    const pc = v.getUint8(o); o += 1;
+    const players = [];
+    for (let i = 0; i < pc; i++) {
+      const id = str();
+      const x = v.getFloat32(o); o += 4; const y = v.getFloat32(o); o += 4;
+      const aim = v.getFloat32(o); o += 4; const health = v.getFloat32(o); o += 4;
+      const fireCooldown = v.getUint16(o); o += 2; const respawnIn = v.getUint16(o); o += 2;
+      const slot = v.getUint8(o); o += 1; const score = v.getUint16(o); o += 2;
+      players.push({ id, x, y, aim, health, fireCooldown, respawnIn, slot, score });
+    }
+    const prc = v.getUint16(o); o += 2;
+    const projectiles = [];
+    for (let i = 0; i < prc; i++) {
+      const id = v.getUint32(o); o += 4; const ownerId = str();
+      const x = v.getFloat32(o); o += 4; const y = v.getFloat32(o); o += 4;
+      const vx = v.getFloat32(o); o += 4; const vy = v.getFloat32(o); o += 4;
+      const ttl = v.getUint16(o); o += 2;
+      projectiles.push({ id, ownerId, x, y, vx, vy, ttl });
+    }
+    return { t: "snapshot", ackTick, snapshot: { tick, players, projectiles } };
+  }
+  throw new Error("bad tag " + tag);
+}
+
 function connect(name) {
   return new Promise((resolve) => {
     const ws = new WebSocket(URL);
+    ws.binaryType = "arraybuffer";
     const state = { name, ws, youId: null, snapshots: 0, last: null };
     ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
+      const m = decodeServer(e.data);
       if (m.t === "welcome") {
         state.youId = m.youId;
         console.log(`[${name}] welcome youId=${m.youId.slice(0, 8)} tickRate=${m.tickRate}`);
@@ -39,13 +97,7 @@ async function main() {
   // Drive A: move right + fire for ~1s.
   let tick = 0;
   for (let i = 0; i < 30; i++) {
-    a.ws.send(
-      JSON.stringify({
-        t: "input",
-        tick: tick++,
-        input: { moveX: 1, moveY: 0, aim: 0.6, firing: true },
-      }),
-    );
+    a.ws.send(encodeInput(tick++, 1, 0, 0.6, true));
     await sleep(33);
   }
   await sleep(300);
