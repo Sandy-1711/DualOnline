@@ -1,143 +1,138 @@
-# DUAL Online — Project Brief
+# DUAL Online — Project Brief & Status
 
-> Context handoff for Claude Code. This file captures the design decisions and
-> reasoning made during planning so we don't re-litigate them. Read this before
-> scaffolding or proposing architecture changes.
+> Context handoff for Claude Code. Top section = current status (keep this
+> accurate). Lower sections = the original design reasoning, preserved so we
+> don't re-litigate settled decisions.
+
+---
+
+## CURRENT STATUS (2026-06-14)
+
+**It's a deployed, playable online 1v1.** The core loop works end-to-end over the
+internet, on phones and web.
+
+### Live
+- **Client (Cloudflare Pages):** https://dual-online.pages.dev
+- **Game-server (Cloudflare Worker + Durable Object):** `wss://dual-game-server.sandy1711003.workers.dev` (`/rooms/:id`)
+- Cloudflare account: sandy1711003@gmail.com.
+
+### What's built
+- `packages/sim` — deterministic core (movement, firing, projectiles, collisions),
+  **fixed 60Hz** tick, pure/runtime-agnostic. 6 tests. ⭐ runs on server AND client.
+- `packages/protocol` — message + state types (zod) **and a binary wire codec**
+  (the transport actually used). 9 tests.
+- `packages/netcode` — pure prediction/reconciliation, entity interpolation,
+  projectile extrapolation (dead reckoning). 8 tests.
+- `apps/game-server` — authoritative `GameRoom` Durable Object: accepts 2 players,
+  steps the sim at 60Hz, **broadcasts at 20Hz**, evicts zombie connections,
+  `locationHint: "apac"`. Local: `wrangler dev`; e2e: `node smoke-test.mjs <wsUrl>`.
+- `apps/mobile` — Expo + Skia twin-stick client. Start menu → **Practice vs Bot**
+  (local sim) or **Play Online** (server). Client prediction + reconciliation with
+  **smooth error correction**, **adaptive interpolation**, dead-reckoned opponent
+  bullets. Web target deployed to Pages; native needs a dev build (Skia is native).
+
+### Deploy (both already wired)
+- Server: `cd apps/game-server && wrangler deploy`
+- Client: `cd apps/mobile && npx expo export --platform web && wrangler pages deploy dist --project-name dual-online --branch main`
+
+### Not built yet (roadmap, rough priority)
+1. **Game feel** — hit flashes, muzzle flash, kill feed, respawn countdown.
+2. **Meta layer** — `apps/api` (tRPC) + `packages/db`: auth, stats, leaderboards,
+   **matchmaking** (replace typing a room code). DB: user leans **MongoDB** → use
+   **Prisma or Mongoose** (Drizzle is SQL-only, won't work with Mongo).
+3. **The other modes** — DEFLECT, DEFEND on the shared arena (only DUEL exists).
+4. **Gameplay additions** — health restore, pickups (health/food), obstacles
+   (all go in `@dual/sim` as new entity arrays; keep determinism).
+5. **Robustness** — auto-reconnect, real ready/lobby (today the match resets on any
+   roster change), >2 players. **Optional:** live RTT/jitter HUD readout.
+
+### Known real-world issues (diagnosed, not bugs in our code)
+- A peer on a poor link (e.g. a VI SIM) jitters; same-network play is smooth.
+  Adaptive interpolation + smooth correction absorb it but can't fix a bad last-mile.
+- A laptop tethered behind a phone hotspot is *downstream* of the phone (extra hop,
+  shared uplink) AND browsers throttle `setInterval`/rAF for unfocused/battery tabs
+  → host-side stutter. Focus the window + plug in to test.
+
+### Learning notes
+There are **knowledge books** in `knowledge/` (gitignored, local only) — 01
+foundations, 02 server, 03 client netcode, 04 deploy, 05 bad networks, 06
+optimizations & diagnosis. Write a new one when asked.
+
+---
 
 ## What we're building
 
 An **online multiplayer game** inspired by [DUAL!](https://play.google.com/store/apps/details?id=com.Seabaa.Dual)
-by Seabaa. The original is a *local* 2-player game (same WiFi/Bluetooth) where two
-phones sit side by side and bullets fly across the gap between screens. It has three
-modes: DUEL (1v1 shootout), DEFEND (co-op), DEFLECT (ball/goals).
+by Seabaa. The original is a *local* 2-player game (phones side by side, bullets
+fly across the gap). We took the spirit online with a redesign:
 
-**We are NOT cloning it literally.** We're taking the spirit online with a redesign:
-
-- **Single shared arena**, slither.io-style — both players look at the *same* field,
-  not two adjacent screens. This deliberately drops the original's two-screens-as-one-
-  physical-space conceit, which was its hardest-to-port feature.
-- **No tilt/accelerometer controls.** Replaced with normal on-screen controls suited
-  to a shared-arena game.
-- Players connect and play **over the internet**, not local network.
+- **Single shared arena**, slither.io-style — both players look at the *same* field.
+- **No tilt/accelerometer.** Twin-stick on-screen controls (left = move, right =
+  aim + fire).
+- Players connect and play **over the internet**.
 
 ## Locked decisions
 
-- **Platform:** Native mobile via **React Native / Expo**.
-- **Design:** Single shared online arena (slither-style), no tilt.
-- **Monorepo tooling:** **Turborepo + pnpm workspaces + TypeScript**.
-- **Meta/API layer:** **tRPC** (auth, profiles, stats, leaderboards, matchmaking).
-- **Realtime gameplay:** a dedicated realtime channel — **NOT tRPC**. tRPC is
-  request/response and wrong for a 30–60Hz game loop.
+- **Platform:** React Native / Expo. Renderer: `@shopify/react-native-skia` driven
+  by a `requestAnimationFrame` loop.
+- **Monorepo:** Turborepo + pnpm workspaces + TypeScript. (pnpm needs
+  `node-linker=hoisted` for Metro; workspace pkgs use extensionless imports.)
+- **Networking: authoritative server on Cloudflare Durable Objects** — RESOLVED &
+  DEPLOYED (see reasoning below). One DO per room holds state + WebSockets.
+- **Realtime transport:** WebSocket carrying a **binary protocol** (not tRPC, not
+  JSON). Meta/API layer (future) will be tRPC over HTTP.
+- **Netcode:** authoritative server + client-side prediction + reconciliation +
+  entity interpolation (Gambetta / Valve model).
 
-## OPEN DECISION — confirm before designing the protocol
+## Why authoritative server (not P2P) — settled, don't re-open
 
-**Networking model: authoritative server vs P2P.**
-
-The user initially wanted **P2P to avoid server costs**. Recommendation during planning
-was to **go authoritative instead**, for these reasons (don't lose these):
-
-- "P2P = no servers" is false for realtime mobile. WebRTC still needs a **signaling
-  server**, **STUN**, and **TURN**. On mobile, carrier-grade NAT makes direct
-  connections fail *often*, forcing TURN relay — which relays *all* game traffic and
-  can cost **more** than a small game server.
-- You **still need matchmaking** (a server) to pair players.
-- P2P has **no referee** → one peer must be authority → latency edge + cheating.
-- **slither.io itself runs authoritative servers**, not P2P.
-- A **2-player authoritative server is extremely cheap** (tiny packets). Near-zero-cost
-  hosting options exist:
-  - **Cloudflare Durable Objects** — one object per game room, holds authoritative
-    state + WebSocket connections, **scales to zero**, pay-per-use. Recommended default.
-  - Small instance on **Fly.io / Railway / Render** — hosts many rooms cheaply.
-
-**Default assumption unless the user says otherwise: authoritative server on Cloudflare
-Durable Objects.** Confirm with the user before committing the protocol/transport design.
+- "P2P = no servers" is false for realtime mobile: WebRTC still needs signaling +
+  STUN + **TURN** (carrier-grade NAT forces relay, which can cost more than a tiny
+  game server). You still need a matchmaking server. P2P has no referee → cheating
+  + latency edge. slither.io itself runs authoritative servers.
+- A 2-player authoritative server is extremely cheap. **Cloudflare Durable Objects**
+  scale to zero, pay-per-use, one object per room. (Vercel can't host realtime —
+  functions are ephemeral; it's only viable for the future tRPC api layer.)
 
 ## Architecture
 
-Two-layer split:
+1. **Meta layer (tRPC/HTTP) — future:** auth, profiles, stats, leaderboards,
+   matchmaking.
+2. **Realtime layer (WebSocket) — built:** clients send inputs; the DO is the single
+   source of truth and broadcasts state snapshots.
 
-1. **Meta layer (tRPC over HTTP):** auth, profiles, stats, leaderboards, achievements,
-   friends, matchmaking (create room / join / queue).
-2. **Realtime layer (WebSocket):** the live match. Clients send inputs; server is the
-   single source of truth and broadcasts state snapshots.
-
-**Netcode model:** authoritative server + **client-side prediction** (own player moves
-instantly, no round-trip wait) + **entity interpolation** (remote players/projectiles
-rendered slightly in the past for smoothness). References: Gabriel Gambetta's
-"Fast-Paced Multiplayer" series; Valve Source multiplayer networking.
-
-**The crown jewel:** a shared **`sim` package** — deterministic game logic imported by
-*both* the server (authority) and the client (prediction). Same TypeScript, two runtimes.
+**Crown jewel:** the shared `sim` package — identical deterministic TypeScript
+imported by both the server (authority) and the client (prediction).
 
 ## Monorepo layout
 
 ```
 dual-online/
 ├─ apps/
-│  ├─ mobile/       # Expo (RN) + Skia renderer, client prediction + interpolation
-│  ├─ game-server/  # authoritative realtime rooms (Cloudflare DO worker, or Node+ws)
-│  └─ api/          # tRPC: auth, stats, leaderboards, matchmaking
+│  ├─ mobile/       # Expo + Skia client (prediction/interp) — deployed to CF Pages
+│  ├─ game-server/  # authoritative DO worker — deployed to CF Workers
+│  └─ api/          # tRPC: auth/stats/leaderboards/matchmaking  (NOT built)
 ├─ packages/
-│  ├─ sim/          # ⭐ shared deterministic game logic (server + client import)
-│  ├─ protocol/     # shared message + state types (zod schemas)
-│  ├─ trpc/         # routers + typed client
-│  └─ db/           # drizzle/prisma schema (Postgres; + Redis for queue/leaderboard)
-└─ turbo.json, pnpm-workspace.yaml, tsconfig base, eslint config
+│  ├─ sim/          # ⭐ shared deterministic game logic
+│  ├─ protocol/     # shared types (zod) + binary wire codec
+│  ├─ netcode/      # prediction/reconciliation/interpolation/extrapolation
+│  └─ db/           # Postgres/Mongo schema  (NOT built; Mongo → Prisma/Mongoose)
+└─ turbo.json, pnpm-workspace.yaml, tsconfig.base.json, .npmrc (node-linker=hoisted)
 ```
-
-## Stack choices
-
-- **Rendering (mobile):** `@shopify/react-native-skia` (fast 2D, runs on UI thread),
-  driven by a game loop via `react-native-reanimated`'s frame callback. `expo-gl` is
-  the fallback if Skia is outgrown.
-- **Realtime transport:** RN has built-in `WebSocket` — no native module needed to talk
-  to an authoritative server. (P2P would require `react-native-webrtc`, a native module.)
-- **Validation/schemas:** zod, shared via `packages/protocol`.
-- **DB:** Postgres (Drizzle or Prisma — pick one). Redis optional for matchmaking
-  queue / leaderboards.
 
 ## Constraints & gotchas
 
-- **Expo dev builds required.** Skia (and webrtc, if ever used) are native modules →
-  cannot run in Expo Go. Use a custom dev client / EAS build.
-- **If using Cloudflare Durable Objects:** the Workers runtime is NOT Node. `packages/sim`
-  must be **pure, runtime-agnostic TS** (no Node APIs). This is healthy for determinism anyway.
-- **Determinism:** the sim must be deterministic for prediction/reconciliation to work.
-  Be disciplined with float math, fixed timestep, and stable iteration order.
-- **Hosting region / latency:** primary user is in India — choose a server region
-  accordingly (or Cloudflare's edge handles this for DO).
-
-## Build order
-
-The slither pivot collapses all three original modes into "things happening in one
-shared arena," so they share the same netcode. Sequence:
-
-1. **Monorepo scaffold** — Turborepo + pnpm, the apps/packages skeleton above, shared
-   tsconfig/eslint.
-2. **`packages/sim` + `packages/protocol`** — core deterministic loop: player entity,
-   movement, projectiles, collisions; zod message/state schemas.
-3. **`game-server`** — authoritative room: accept 2 clients, run sim at fixed tick,
-   broadcast snapshots. (DO worker or Node+ws per the open decision.)
-4. **`apps/mobile`** — Skia render of the arena + game loop; client prediction on own
-   player, interpolation on remote entities; WebSocket client.
-5. **Core loop playable:** both players move, shoot, see each other in one arena.
-6. **`api` (tRPC):** matchmaking, then auth/stats/leaderboards.
-7. **Layer the modes** (DUEL-like, DEFLECT-like, DEFEND-like) on the shared arena.
-
-## Suggested first tasks for Claude Code
-
-- Confirm the networking decision (authoritative DO vs Node+ws vs P2P) with the user.
-- Scaffold the Turborepo + pnpm workspace and the apps/packages skeleton.
-- Stand up `packages/protocol` with zod schemas for client→server input and
-  server→client snapshot messages.
-- Implement a minimal deterministic `sim` with a fixed timestep and one test
-  (same inputs → same state) to lock determinism early.
+- **Expo dev builds required for native** (Skia/Reanimated are native modules; not
+  Expo Go). **Web** is the quickest preview and what's deployed.
+- **DO runtime is NOT Node** → `packages/sim` must stay pure runtime-agnostic TS.
+- **Determinism:** fixed timestep, no `Date.now`/`Math.random` in `step`, stable
+  iteration order. (Cross-platform float determinism would need fixed-point later.)
+- **Reanimated 4** → Babel plugin is `react-native-worklets/plugin` (last plugin).
+- **Skia web** needs CanvasKit loaded via CDN in `index.web.ts`.
+- **DO is single-location** — pinned to `apac` for India latency.
 
 ## References
 
 - Original game: https://play.google.com/store/apps/details?id=com.Seabaa.Dual
-- Gabriel Gambetta — Fast-Paced Multiplayer (client prediction, interpolation,
-  server reconciliation)
-- Valve — Source Multiplayer Networking
-- Cloudflare Durable Objects (per-room authoritative state + WebSockets)
-- @shopify/react-native-skia, react-native-reanimated
+- Gabriel Gambetta — Fast-Paced Multiplayer; Valve — Source Multiplayer Networking
+- Cloudflare Durable Objects; @shopify/react-native-skia
