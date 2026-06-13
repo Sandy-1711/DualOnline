@@ -42,6 +42,26 @@ export function interpolateProjectiles(prev: Snapshot, next: Snapshot, t: number
   });
 }
 
+/**
+ * Extrapolate (dead-reckon) projectiles forward from a snapshot using their
+ * known constant velocity. Unlike players, projectiles move in a straight line,
+ * so projecting them to the *present* is accurate — and it keeps fast bullets
+ * visible and smooth even when they'd otherwise blink between sparse snapshots.
+ *
+ * `dtSeconds` is the time since the snapshot was taken; it's clamped to
+ * `maxDtSeconds` so a bullet whose "removed" snapshot was lost doesn't fly on
+ * forever as a ghost.
+ */
+export function extrapolateProjectiles(
+  projectiles: Projectile[],
+  dtSeconds: number,
+  maxDtSeconds = 0.25,
+): Projectile[] {
+  const dt = Math.max(0, Math.min(dtSeconds, maxDtSeconds));
+  if (dt === 0) return projectiles;
+  return projectiles.map((p) => ({ ...p, x: p.x + p.vx * dt, y: p.y + p.vy * dt }));
+}
+
 interface Stamped {
   at: number;
   snap: Snapshot;

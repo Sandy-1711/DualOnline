@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInitialState, neutralInput, step, type PlayerInput } from "@dual/sim";
 import type { Snapshot } from "@dual/protocol";
 import { predict, pruneAcked } from "./predict";
-import { interpolatePlayers, SnapshotBuffer } from "./interpolate";
+import { extrapolateProjectiles, interpolatePlayers, SnapshotBuffer } from "./interpolate";
 
 const RIGHT: PlayerInput = { moveX: 1, moveY: 0, aim: 0, firing: false };
 
@@ -68,6 +68,16 @@ describe("interpolation", () => {
     const players = interpolatePlayers(snap("them", 0, 0), snap("them", 100, 50), 0.5);
     expect(players[0]!.x).toBeCloseTo(50);
     expect(players[0]!.y).toBeCloseTo(25);
+  });
+
+  it("extrapolates projectiles forward by velocity, clamped", () => {
+    const proj = [{ id: 1, ownerId: "them", x: 0, y: 0, vx: 100, vy: 50, ttl: 60 }];
+    // 0.5s would move (50,25) but the cap is 0.25s → (25, 12.5).
+    const out = extrapolateProjectiles(proj, 0.5, 0.25);
+    expect(out[0]!.x).toBeCloseTo(25);
+    expect(out[0]!.y).toBeCloseTo(12.5);
+    // dt=0 returns the same array (no churn).
+    expect(extrapolateProjectiles(proj, 0)).toBe(proj);
   });
 
   it("SnapshotBuffer interpolates between two timestamped snapshots", () => {
