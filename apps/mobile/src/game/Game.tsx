@@ -55,11 +55,11 @@ export function Game() {
     moveRef.current = { x: s.x * s.magnitude, y: s.y * s.magnitude };
   };
   const onAim = (s: StickValue) => {
-    if (s.magnitude > 0.3) {
+    // Touching the right stick fires immediately (in the current aim direction);
+    // dragging it steers the shots. Releasing stops fire and keeps the last aim.
+    firingRef.current = s.pressed;
+    if (s.magnitude > 0.2) {
       aimRef.current = Math.atan2(s.y, s.x);
-      firingRef.current = true;
-    } else {
-      firingRef.current = false;
     }
   };
 

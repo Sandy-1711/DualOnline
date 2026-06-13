@@ -18,6 +18,8 @@ export interface StickValue {
   y: number;
   /** 0..1 push magnitude. */
   magnitude: number;
+  /** True while a finger/pointer is on the stick, even without dragging. */
+  pressed: boolean;
 }
 
 interface Props {
@@ -36,18 +38,21 @@ export function Joystick({ side, color, onChange }: Props) {
       const nx = dist === 0 ? 0 : tx / dist;
       const ny = dist === 0 ? 0 : ty / dist;
       setKnob({ x: nx * clamped, y: ny * clamped });
-      onChange({ x: nx, y: ny, magnitude: clamped / BASE_RADIUS });
+      onChange({ x: nx, y: ny, magnitude: clamped / BASE_RADIUS, pressed: true });
     },
     [onChange],
   );
 
   const reset = useCallback(() => {
     setKnob({ x: 0, y: 0 });
-    onChange({ x: 0, y: 0, magnitude: 0 });
+    onChange({ x: 0, y: 0, magnitude: 0, pressed: false });
   }, [onChange]);
 
+  // minDistance(0) makes the gesture activate on touch-down (no drag needed),
+  // so onBegin/onUpdate fire immediately — a press counts even if you don't move.
   const pan = Gesture.Pan()
     .runOnJS(true)
+    .minDistance(0)
     .onBegin((e) => update(e.translationX, e.translationY))
     .onUpdate((e) => update(e.translationX, e.translationY))
     .onFinalize(reset);
