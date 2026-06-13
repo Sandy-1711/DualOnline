@@ -17,7 +17,7 @@ import {
   snapshotToState,
   type PendingInput,
 } from "@dual/netcode";
-import { TICK_RATE, type GameState, type PlayerInput } from "@dual/sim";
+import { neutralInput, step, TICK_RATE, type GameState, type InputMap, type PlayerInput } from "@dual/sim";
 import type { Player, Projectile } from "@dual/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { StickValue } from "../game/Joystick";
@@ -55,6 +55,19 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
   const pendingRef = useRef<PendingInput[]>([]);
   const bufferRef = useRef(new SnapshotBuffer(INTERP_DELAY_MS));
   const clientTickRef = useRef(0);
+  // The current predicted state. Maintained INCREMENTALLY: stepped one tick per
+  // input we send, and re-based on the authoritative snapshot when one arrives.
+  // This keeps the per-frame render path cheap (no full replay every frame).
+  const predictedRef = useRef<GameState | null>(null);
+
+  const stepPredictionForOwnInput = (input: PlayerInput) => {
+    const id = youIdRef.current;
+    const pred = predictedRef.current;
+    if (!id || !pred) return;
+    const inputs: InputMap = { [id]: input };
+    for (const p of pred.players) if (p.id !== id) inputs[p.id] = neutralInput();
+    predictedRef.current = step(pred, inputs);
+  };
 
   // 1) Connection lifecycle.
   useEffect(() => {
@@ -65,12 +78,19 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
         setYouId(id);
       },
       onSnapshot: (snapshot, ackTick) => {
-        authRef.current = snapshotToState(snapshot);
+        const auth = snapshotToState(snapshot);
+        authRef.current = auth;
         if (ackTick != null) {
           ackRef.current = ackTick;
           pendingRef.current = pruneAcked(pendingRef.current, ackTick);
         }
         bufferRef.current.push(snapshot);
+        // Reconcile: re-base prediction on the authoritative truth, replaying the
+        // still-unacknowledged inputs. The expensive full replay happens here, at
+        // the ~20Hz snapshot rate — not on every render frame.
+        if (youIdRef.current) {
+          predictedRef.current = predict(auth, youIdRef.current, pendingRef.current, ackRef.current);
+        }
       },
     });
     conn.connect();
@@ -78,7 +98,8 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
     return () => conn.close();
   }, [serverUrl, roomId]);
 
-  // 2) Send our input at a fixed rate, tagged with a client tick for reconciliation.
+  // 2) Send our input at a fixed rate, tagged with a client tick for reconciliation,
+  //    and advance the prediction by exactly one tick (cheap, incremental).
   useEffect(() => {
     const id = setInterval(() => {
       if (!youIdRef.current) return;
@@ -94,32 +115,33 @@ export function useOnlineGame(serverUrl: string, roomId: string) {
         pendingRef.current.splice(0, pendingRef.current.length - MAX_PENDING);
       }
       connRef.current?.sendInput(tick, input);
+      stepPredictionForOwnInput(input);
     }, SEND_MS);
     return () => clearInterval(id);
   }, []);
 
-  // 3) Each frame, compose predicted-self + interpolated-others into a render frame.
+  // 3) Each frame, compose predicted-self + interpolated-others. No prediction
+  //    work here anymore — just read the maintained predicted state and sample
+  //    the interpolation buffer.
   useEffect(() => {
     let raf: number;
     const tick = () => {
       const id = youIdRef.current;
-      const auth = authRef.current;
-      if (id && auth) {
-        const predicted = predict(auth, id, pendingRef.current, ackRef.current);
+      const predicted = predictedRef.current;
+      if (id && predicted) {
         const interp =
-          bufferRef.current.sample() ?? { players: auth.players, projectiles: auth.projectiles };
+          bufferRef.current.sample() ?? {
+            players: predicted.players,
+            projectiles: predicted.projectiles,
+          };
 
-        const players: Player[] = auth.players.map((p) => {
-          if (p.id === id) {
-            return (predicted.players.find((x) => x.id === id) ?? p) as Player;
-          }
+        const players: Player[] = predicted.players.map((p) => {
+          if (p.id === id) return p as Player; // predicted self
           return (interp.players.find((x) => x.id === p.id) ?? p) as Player;
         });
 
         const projectiles: Projectile[] = [
-          // our shots: predicted, so they appear the instant we fire
           ...(predicted.projectiles.filter((pr) => pr.ownerId === id) as Projectile[]),
-          // their shots: interpolated, so they glide
           ...interp.projectiles.filter((pr) => pr.ownerId !== id),
         ];
 
