@@ -1,0 +1,16 @@
+name = "dual-game-server"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+# Lets the Workers runtime use the global `WebSocketPair`, `crypto`, etc.
+compatibility_flags = ["nodejs_compat"]
+
+# One Durable Object class — GameRoom — holds the authoritative state and the
+# WebSocket connections for a single match. We address one instance per room id.
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+# Durable Objects must be declared in a migration so the runtime knows the class.
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]

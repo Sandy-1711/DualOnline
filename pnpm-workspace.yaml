@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   "@shopify/react-native-skia": true
   esbuild: true
+  sharp: true
+  workerd: true
