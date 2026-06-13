@@ -1,7 +1,9 @@
 // Ad-hoc smoke test for the authoritative room. Connects two clients, drives
 // inputs from one, and checks the server moves that player and broadcasts
 // snapshots to both. Run while `wrangler dev` is up on 8787.
-const URL = "ws://127.0.0.1:8787/rooms/smoke";
+// Base URL can be passed as argv[2] or WS_URL; defaults to local wrangler dev.
+const BASE = process.argv[2] ?? process.env.WS_URL ?? "ws://127.0.0.1:8787";
+const URL = `${BASE.replace(/\/+$/, "")}/rooms/smoke`;
 
 function connect(name) {
   return new Promise((resolve) => {
