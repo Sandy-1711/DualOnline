@@ -11,11 +11,29 @@
  * isolation, and it reuses the exact same `step` the server runs.
  */
 import { neutralInput, step, type GameState, type InputMap, type PlayerInput } from "@dual/sim";
+import type { Snapshot } from "@dual/protocol";
 
 /** A local input the client sent, tagged with the client tick it belongs to. */
 export interface PendingInput {
   tick: number;
   input: PlayerInput;
+}
+
+/**
+ * Rehydrate a server `Snapshot` into a full `GameState` the sim can step. The
+ * wire snapshot omits the sim's internal `nextProjectileId`; we derive a safe
+ * value (one past the highest live projectile id) so any projectiles we predict
+ * locally get non-colliding ids.
+ */
+export function snapshotToState(snap: Snapshot): GameState {
+  let maxId = 0;
+  for (const p of snap.projectiles) if (p.id > maxId) maxId = p.id;
+  return {
+    tick: snap.tick,
+    players: snap.players,
+    projectiles: snap.projectiles,
+    nextProjectileId: maxId + 1,
+  };
 }
 
 /**
