@@ -5,18 +5,19 @@
  * edit. Two players entering the same room code land in the same match.
  */
 import { useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { playerColor, theme } from "../theme";
 
 export type StartMode =
   | { mode: "local" }
   | { mode: "online"; serverUrl: string; roomId: string };
 
+// The deployed authoritative server. Editable in the menu for local testing
+// (use ws://localhost:8787 against `wrangler dev`).
+const PRODUCTION_SERVER = "wss://dual-game-server.sandy1711003.workers.dev";
+
 function defaultServerUrl(): string {
-  if (Platform.OS === "web" && typeof location !== "undefined") {
-    return `ws://${location.hostname}:8787`;
-  }
-  return "ws://10.178.116.235:8787";
+  return PRODUCTION_SERVER;
 }
 
 export function Menu({ onStart }: { onStart: (s: StartMode) => void }) {
