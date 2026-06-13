@@ -8,6 +8,9 @@ build/
 .turbo/
 *.tsbuildinfo
 
+# Cloudflare Workers / wrangler local build cache
+.wrangler/
+
 # Expo
 .expo/
 .expo-shared/
@@ -25,6 +28,9 @@ web-build/
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+
+# Knowledge books — personal learning notes, kept out of version control
+knowledge/
 
 # OS / editor
 .DS_Store
