@@ -92,17 +92,22 @@ export class SnapshotBuffer {
   }
 
   /**
-   * Sample the buffer at `now - delayMs`. Returns interpolated player and
-   * projectile arrays, or null if we have nothing yet.
+   * Sample the buffer at `now - delay`. `delayMs` defaults to the buffer's
+   * configured delay but can be overridden per-call (e.g. an adaptive delay that
+   * grows under jitter). Returns interpolated player and projectile arrays, or
+   * null if we have nothing yet.
    */
-  sample(now: number = Date.now()): { players: Player[]; projectiles: Projectile[] } | null {
+  sample(
+    now: number = Date.now(),
+    delayMs: number = this.delayMs,
+  ): { players: Player[]; projectiles: Projectile[] } | null {
     if (this.buf.length === 0) return null;
     if (this.buf.length === 1) {
       const only = this.buf[0]!.snap;
       return { players: only.players, projectiles: only.projectiles };
     }
 
-    const target = now - this.delayMs;
+    const target = now - delayMs;
 
     // Find the pair (a, b) with a.at <= target <= b.at.
     let a = this.buf[0]!;
