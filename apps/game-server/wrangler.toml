@@ -11,6 +11,9 @@ name = "GAME_ROOM"
 class_name = "GameRoom"
 
 # Durable Objects must be declared in a migration so the runtime knows the class.
+# SQLite-backed DOs are available on the Workers FREE plan (the classic key-value
+# class type requires a paid plan). We keep all state in memory, so the SQLite
+# backend costs us nothing and unlocks free-tier deploys.
 [[migrations]]
 tag = "v1"
-new_classes = ["GameRoom"]
+new_sqlite_classes = ["GameRoom"]
