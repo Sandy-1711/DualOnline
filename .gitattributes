@@ -1,0 +1,9 @@
+# Normalize line endings: store text as LF in the repo, let Git handle checkout.
+* text=auto eol=lf
+
+# Binary assets — never touch line endings.
+*.png binary
+*.jpg binary
+*.ttf binary
+*.wasm binary
+pnpm-lock.yaml -text
